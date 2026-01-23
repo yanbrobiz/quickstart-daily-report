@@ -57,16 +57,15 @@ async function scrapeReport(username, password) {
     });
     console.log('🔍 頁面上的 input placeholders:', placeholders);
 
-    // 嘗試多種可能的選擇器
+    // 嘗試多種可能的選擇器 (優先順序很重要!)
     const possibleSelectors = [
-      "input[placeholder='(搜尋店家)']",
-      "input[placeholder*='搜尋']",
-      "input[placeholder*='Shop']",
-      "input[placeholder*='shop']",
-      "input[placeholder*='Select']",
-      "input[placeholder*='Search']",
-      ".el-select input",
-      ".el-input__inner"
+      "input[placeholder='(Search Store)']",  // 英文版店家選擇器
+      "input[placeholder='(搜尋店家)']",       // 中文版店家選擇器
+      "input[placeholder*='Store']",          // 包含 Store 的
+      "input[placeholder*='店家']",            // 包含店家的
+      "input[placeholder*='搜尋']",            // 包含搜尋的
+      "input[placeholder*='Search']",         // 包含 Search 的
+      // 注意: Select 放最後，因為它可能匹配到日期選擇器
     ];
 
     let dropdownClicked = false;
