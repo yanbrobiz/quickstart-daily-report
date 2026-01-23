@@ -43,86 +43,104 @@ async function scrapeReport(username, password) {
     // 2. 導航到店家報表頁面
     console.log('📊 前往店家報表頁面...');
     await page.goto(SHOP_STAT_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    await delay(3000); // 增加等待時間
+    // 等待頁面核心元素載入
+    await page.waitForSelector('.el-main', { timeout: 30000 });
+    await delay(2000);
 
     // 3. 選擇店家
     console.log(`🏪 選擇店家: ${SHOP_NAME}...`);
 
-    // 點擊店家下拉選單
-    await page.evaluate((shopName) => {
-      // 找到包含 "搜尋店家" 或店家選擇器的元素
-      const selectors = document.querySelectorAll('div[class*="select"], button, input');
-      for (const el of selectors) {
-        if (el.textContent && (el.textContent.includes('搜尋店家') || el.textContent.includes('選擇'))) {
-          el.click();
-          break;
-        }
-      }
-    });
-    await delay(1500);
+    // 3a. 點擊店家下拉選單 (使用 placeholder 定位)
+    const dropdownSelector = "input[placeholder='(搜尋店家)']";
+    await page.waitForSelector(dropdownSelector, { timeout: 10000 });
+    await page.click(dropdownSelector);
+    await delay(1000); // 等待下拉選單動畫
 
-    // 選擇特定店家
-    await page.evaluate((shopName) => {
-      const elements = document.querySelectorAll('div, li, span, option');
-      for (const el of elements) {
-        if (el.textContent && el.textContent.trim().includes(shopName)) {
-          el.click();
-          break;
-        }
-      }
-    }, SHOP_NAME);
-    await delay(3000); // 等待資料載入
+    // 3b. 選擇特定店家 (使用 XPath 定位含有特定文字的 li)
+    const shopOptionXPath = `//li[.//span[contains(text(), '${SHOP_NAME}')]]`;
+    await page.waitForXPath(shopOptionXPath, { timeout: 10000 });
+    const [shopOption] = await page.$x(shopOptionXPath);
+
+    if (shopOption) {
+      await shopOption.click();
+      console.log('✅ 已點擊店家選項');
+    } else {
+      throw new Error(`找不到店家: ${SHOP_NAME}`);
+    }
+
+    await delay(3000); // 等待資料刷新
 
     // 4. 點擊「昨日」按鈕
     console.log('📅 點擊昨日按鈕...');
-    await page.evaluate(() => {
-      const elements = document.querySelectorAll('button, div, span');
-      for (const el of elements) {
-        if (el.textContent && el.textContent.trim() === '昨日') {
-          el.click();
-          break;
+    // 使用更精確的 XPath 尋找按鈕文字
+    const yesterdayBtnXPath = "//button[contains(., '昨日')] | //div[contains(@class, 'el-radio-button')]/span[contains(., '昨日')]";
+    await page.waitForXPath(yesterdayBtnXPath, { timeout: 10000 });
+    const [yesterdayBtn] = await page.$x(yesterdayBtnXPath);
+
+    if (yesterdayBtn) {
+      await yesterdayBtn.click();
+    } else {
+      // Fallback: 遍歷查找 (保留原本的邏輯作為備案)
+      await page.evaluate(() => {
+        const elements = document.querySelectorAll('button, div, span');
+        for (const el of elements) {
+          if (el.textContent && el.textContent.trim() === '昨日') {
+            el.click();
+            break;
+          }
         }
-      }
-    });
-    await delay(5000); // 增加等待時間，讓資料完全載入
+      });
+    }
+
+    await delay(5000); // 等待資料完全載入
 
     // 5. 抓取數據
     console.log('💰 抓取營業數據...');
 
-    // 先截圖 debug
-    const pageContent = await page.content();
-    console.log('📄 頁面長度:', pageContent.length);
-
     const data = await page.evaluate(() => {
       const result = {
         totalRevenue: 0,
-        uberEatsRevenue: 0,
-        debug: []
+        uberEatsRevenue: 0
       };
 
-      // 方法1: 找所有包含 $ 符號的元素
-      const allText = document.body.innerText;
-      result.debug.push('頁面文字內容(前500字): ' + allText.substring(0, 500).replace(/\n/g, ' '));
+      const bodyText = document.body.innerText;
 
-      // 找總營業額 - 通常是最大的金額數字
-      const moneyMatches = allText.match(/\$[\d,]+/g);
+      // 方法1: 找總營業額 (通常是頁面上最大的金額)
+      // 排除掉可能是日期的數字 (例如 2026) 和過小的數字
+      const moneyMatches = bodyText.match(/\$[\d,]+/g);
       if (moneyMatches) {
-        result.debug.push('找到金額數量: ' + moneyMatches.length);
-        // 轉換並找最大值
-        const values = moneyMatches.map(m => parseInt(m.replace(/[$,]/g, '')));
-        result.totalRevenue = Math.max(...values);
+        const values = moneyMatches
+          .map(m => parseInt(m.replace(/[$,]/g, '')))
+          .filter(v => v > 100); // 過濾掉太小的數字
+
+        if (values.length > 0) {
+          result.totalRevenue = Math.max(...values);
+        }
+      }
+
+      // 如果方法1失敗，嘗試查找 "總營業額" 關鍵字附近的數字
+      if (result.totalRevenue === 0) {
+        const blocks = document.querySelectorAll('div, .card-panel-num');
+        for (const block of blocks) {
+          if (block.innerText.includes('總營業額')) {
+            // 嘗試在該元素的父層或本身找數字
+            const numMatch = (block.innerText + block.parentElement?.innerText).match(/\$?([\d,]+)/);
+            if (numMatch) {
+              const val = parseInt(numMatch[1].replace(/,/g, ''));
+              if (val > result.totalRevenue) result.totalRevenue = val;
+            }
+          }
+        }
       }
 
       // 方法2: 尋找 Uber Eats 相關的營業額
-      const bodyText = document.body.innerText;
       const lines = bodyText.split('\n');
       for (const line of lines) {
         if (line.includes('Uber') && line.includes('Eats')) {
           const match = line.match(/\$?([\d,]+)/g);
           if (match && match.length > 0) {
-            // 取數字部分
             const nums = match.map(m => parseInt(m.replace(/[$,]/g, '')));
-            // 取最後一個非零數字（通常是營業額）
+            // 取最後一個合理的數字
             for (let i = nums.length - 1; i >= 0; i--) {
               if (nums[i] > 0 && nums[i] < 100000) {
                 result.uberEatsRevenue = nums[i];
@@ -133,31 +151,8 @@ async function scrapeReport(username, password) {
         }
       }
 
-      // 方法3: 如果還是找不到總營業額，用更精確的方式
-      if (result.totalRevenue === 0) {
-        const divs = document.querySelectorAll('div, h3, span');
-        for (const div of divs) {
-          const text = div.innerText || '';
-          if (text.includes('總營業額')) {
-            const parent = div.parentElement;
-            if (parent) {
-              const match = parent.innerText.match(/\$?([\d,]+)/);
-              if (match) {
-                result.totalRevenue = parseInt(match[1].replace(/,/g, ''));
-              }
-            }
-          }
-        }
-      }
-
       return result;
     });
-
-    // 輸出 debug 資訊
-    if (data.debug) {
-      data.debug.forEach(d => console.log('🔍', d));
-      delete data.debug;
-    }
 
     // 計算昨日日期
     const yesterday = new Date();
