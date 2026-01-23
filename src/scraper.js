@@ -49,41 +49,105 @@ async function scrapeReport(username, password) {
     // 3. 選擇店家
     console.log(`🏪 選擇店家: ${SHOP_NAME}...`);
 
-    // 3a. 點擊店家下拉選單 (使用 placeholder 定位)
-    const dropdownSelector = "input[placeholder='(搜尋店家)']";
-    await page.waitForSelector(dropdownSelector, { timeout: 30000 });
-    await page.click(dropdownSelector);
-    await delay(1500); // 等待下拉選單動畫
+    // 3a. 尋找店家下拉選單 (支援中英文 placeholder)
+    // 先嘗試找出所有 input 的 placeholder 來 debug
+    const placeholders = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input'));
+      return inputs.map(i => i.placeholder).filter(p => p);
+    });
+    console.log('🔍 頁面上的 input placeholders:', placeholders);
 
-    // 3b. 選擇特定店家 (使用 XPath 定位含有特定文字的 li)
-    const shopOptionXPath = `//li[.//span[contains(text(), '${SHOP_NAME}')]]`;
-    await page.waitForXPath(shopOptionXPath, { timeout: 10000 });
-    const [shopOption] = await page.$x(shopOptionXPath);
+    // 嘗試多種可能的選擇器
+    const possibleSelectors = [
+      "input[placeholder='(搜尋店家)']",
+      "input[placeholder*='搜尋']",
+      "input[placeholder*='Shop']",
+      "input[placeholder*='shop']",
+      "input[placeholder*='Select']",
+      "input[placeholder*='Search']",
+      ".el-select input",
+      ".el-input__inner"
+    ];
 
-    if (shopOption) {
-      await shopOption.click();
-      console.log('✅ 已點擊店家選項');
-    } else {
-      throw new Error(`找不到店家: ${SHOP_NAME}`);
+    let dropdownClicked = false;
+    for (const selector of possibleSelectors) {
+      try {
+        const element = await page.$(selector);
+        if (element) {
+          console.log(`✅ 找到選擇器: ${selector}`);
+          await element.click();
+          dropdownClicked = true;
+          break;
+        }
+      } catch (e) {
+        // 繼續嘗試下一個
+      }
+    }
+
+    if (!dropdownClicked) {
+      // Fallback: 點擊包含 "Select" 或 "Shop" 文字的元素
+      console.log('⚠️ 使用 fallback 點擊方式...');
+      await page.evaluate(() => {
+        const elements = document.querySelectorAll('div, input, button, span');
+        for (const el of elements) {
+          const text = el.textContent || el.placeholder || '';
+          if (text.includes('Select') || text.includes('Shop') || text.includes('搜尋') || text.includes('店家')) {
+            el.click();
+            break;
+          }
+        }
+      });
+    }
+    await delay(2000); // 等待下拉選單動畫
+
+    // 3b. 選擇特定店家 (使用 XPath 定位含有特定文字的 li 或 span)
+    const shopOptionXPath = `//li[.//span[contains(text(), '${SHOP_NAME}')]] | //span[contains(text(), '${SHOP_NAME}')]`;
+    try {
+      await page.waitForXPath(shopOptionXPath, { timeout: 10000 });
+      const [shopOption] = await page.$x(shopOptionXPath);
+
+      if (shopOption) {
+        await shopOption.click();
+        console.log('✅ 已點擊店家選項');
+      } else {
+        throw new Error(`找不到店家: ${SHOP_NAME}`);
+      }
+    } catch (e) {
+      console.log('⚠️ XPath 方式失敗，嘗試 evaluate 點擊...');
+      await page.evaluate((shopName) => {
+        const elements = document.querySelectorAll('li, span, div');
+        for (const el of elements) {
+          if (el.textContent && el.textContent.includes(shopName)) {
+            el.click();
+            break;
+          }
+        }
+      }, SHOP_NAME);
     }
 
     await delay(3000); // 等待資料刷新
 
-    // 4. 點擊「昨日」按鈕
+    // 4. 點擊「昨日/Yesterday」按鈕
     console.log('📅 點擊昨日按鈕...');
-    // 使用更精確的 XPath 尋找按鈕文字
-    const yesterdayBtnXPath = "//button[contains(., '昨日')] | //div[contains(@class, 'el-radio-button')]/span[contains(., '昨日')]";
-    await page.waitForXPath(yesterdayBtnXPath, { timeout: 10000 });
-    const [yesterdayBtn] = await page.$x(yesterdayBtnXPath);
+    // 支援中英文的 XPath
+    const yesterdayBtnXPath = "//button[contains(., '昨日') or contains(., 'Yesterday')] | //div[contains(@class, 'el-radio-button')]/span[contains(., '昨日') or contains(., 'Yesterday')] | //span[text()='Yesterday'] | //span[text()='昨日']";
 
-    if (yesterdayBtn) {
-      await yesterdayBtn.click();
-    } else {
+    try {
+      await page.waitForXPath(yesterdayBtnXPath, { timeout: 10000 });
+      const [yesterdayBtn] = await page.$x(yesterdayBtnXPath);
+
+      if (yesterdayBtn) {
+        await yesterdayBtn.click();
+        console.log('✅ 已點擊昨日按鈕');
+      }
+    } catch (e) {
       // Fallback: 遍歷查找 (保留原本的邏輯作為備案)
+      console.log('⚠️ XPath 方式失敗，使用 fallback 點擊...');
       await page.evaluate(() => {
         const elements = document.querySelectorAll('button, div, span');
         for (const el of elements) {
-          if (el.textContent && el.textContent.trim() === '昨日') {
+          const text = el.textContent ? el.textContent.trim() : '';
+          if (text === '昨日' || text === 'Yesterday') {
             el.click();
             break;
           }
