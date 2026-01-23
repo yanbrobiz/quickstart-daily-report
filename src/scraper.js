@@ -239,9 +239,10 @@ async function scrapeReport(username, password) {
             }
           }
         }
+      }
 
-        return result;
-      });
+      return result;
+    });
 
     // 計算昨日日期
     const yesterday = new Date();
