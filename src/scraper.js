@@ -195,26 +195,53 @@ async function scrapeReport(username, password) {
         }
       }
 
-      // 方法2: 尋找 Uber Eats 相關的營業額
-      const lines = bodyText.split('\n');
-      for (const line of lines) {
-        if (line.includes('Uber') && line.includes('Eats')) {
-          const match = line.match(/\$?([\d,]+)/g);
-          if (match && match.length > 0) {
-            const nums = match.map(m => parseInt(m.replace(/[$,]/g, '')));
-            // 取最後一個合理的數字
-            for (let i = nums.length - 1; i >= 0; i--) {
-              if (nums[i] > 0 && nums[i] < 100000) {
-                result.uberEatsRevenue = nums[i];
-                break;
+      // 方法2: 尋找 Uber Eats 營業額 (使用表格結構)
+      // 頁面上有 "點餐平台" 表格，Uber Eats 那行包含 ubereats.svg 圖片
+      const tableRows = document.querySelectorAll('.el-table__row');
+      for (const row of tableRows) {
+        const imgs = row.querySelectorAll('img');
+        let isUberEats = false;
+        for (const img of imgs) {
+          if (img.src && img.src.includes('ubereats')) {
+            isUberEats = true;
+            break;
+          }
+        }
+        if (isUberEats) {
+          // 取該行所有儲存格的文字
+          const cells = row.querySelectorAll('td');
+          if (cells.length >= 3) {
+            // 營業額通常在最後一個儲存格
+            const revenueText = cells[cells.length - 1].innerText;
+            const match = revenueText.match(/\$?([\d,]+)/);
+            if (match) {
+              result.uberEatsRevenue = parseInt(match[1].replace(/,/g, ''));
+            }
+          }
+          break;
+        }
+      }
+
+      // Fallback: 如果表格方式找不到，嘗試用文字搜尋
+      if (result.uberEatsRevenue === 0) {
+        const lines = bodyText.split('\n');
+        for (const line of lines) {
+          if (line.includes('Uber') && line.includes('Eats')) {
+            const match = line.match(/\$?([\d,]+)/g);
+            if (match && match.length > 0) {
+              const nums = match.map(m => parseInt(m.replace(/[$,]/g, '')));
+              for (let i = nums.length - 1; i >= 0; i--) {
+                if (nums[i] > 0 && nums[i] < 100000) {
+                  result.uberEatsRevenue = nums[i];
+                  break;
+                }
               }
             }
           }
         }
-      }
 
-      return result;
-    });
+        return result;
+      });
 
     // 計算昨日日期
     const yesterday = new Date();
