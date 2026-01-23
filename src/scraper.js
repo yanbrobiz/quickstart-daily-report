@@ -25,7 +25,10 @@ async function scrapeReport(username, password) {
 
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
+
+    // 設定 User-Agent 偽裝成桌面瀏覽器
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.setViewport({ width: 1920, height: 1080 });
 
     // 1. 登入
     console.log('🔐 登入中...');
@@ -99,7 +102,7 @@ async function scrapeReport(username, password) {
 
       // 方法1: 找所有包含 $ 符號的元素
       const allText = document.body.innerText;
-      result.debug.push('頁面文字長度: ' + allText.length);
+      result.debug.push('頁面文字內容(前500字): ' + allText.substring(0, 500).replace(/\n/g, ' '));
 
       // 找總營業額 - 通常是最大的金額數字
       const moneyMatches = allText.match(/\$[\d,]+/g);
