@@ -43,18 +43,17 @@ async function scrapeReport(username, password) {
     // 2. 導航到店家報表頁面
     console.log('📊 前往店家報表頁面...');
     await page.goto(SHOP_STAT_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    // 等待頁面核心元素載入
-    await page.waitForSelector('.el-main', { timeout: 30000 });
-    await delay(2000);
+    // 等待頁面載入 (使用固定延遲，避免選擇器在不同環境不一致)
+    await delay(5000);
 
     // 3. 選擇店家
     console.log(`🏪 選擇店家: ${SHOP_NAME}...`);
 
     // 3a. 點擊店家下拉選單 (使用 placeholder 定位)
     const dropdownSelector = "input[placeholder='(搜尋店家)']";
-    await page.waitForSelector(dropdownSelector, { timeout: 10000 });
+    await page.waitForSelector(dropdownSelector, { timeout: 30000 });
     await page.click(dropdownSelector);
-    await delay(1000); // 等待下拉選單動畫
+    await delay(1500); // 等待下拉選單動畫
 
     // 3b. 選擇特定店家 (使用 XPath 定位含有特定文字的 li)
     const shopOptionXPath = `//li[.//span[contains(text(), '${SHOP_NAME}')]]`;
