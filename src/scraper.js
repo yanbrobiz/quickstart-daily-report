@@ -9,9 +9,6 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * 抓取 QuickClick 後台的昨日營業數據
- * @param {string} username - 登入帳號
- * @param {string} password - 登入密碼
- * @returns {Promise<{date: string, totalRevenue: number, uberEatsRevenue: number}>}
  */
 async function scrapeReport(username, password) {
   console.log('🚀 啟動瀏覽器...');
@@ -33,110 +30,119 @@ async function scrapeReport(username, password) {
     // 1. 登入
     console.log('🔐 登入中...');
     await page.goto(LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-
-    // 等待登入表單載入
     await page.waitForSelector('input[name="username"]', { timeout: 30000 });
-
-    // 輸入帳號密碼
     await page.type('input[name="username"]', username, { delay: 50 });
     await page.type('input[name="password"]', password, { delay: 50 });
-
-    // 點擊登入按鈕
     await page.click('button[type="submit"]');
-
-    // 等待登入完成
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
     console.log('✅ 登入成功');
 
     // 2. 導航到店家報表頁面
     console.log('📊 前往店家報表頁面...');
     await page.goto(SHOP_STAT_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    await delay(2000);
+    await delay(3000); // 增加等待時間
 
     // 3. 選擇店家
     console.log(`🏪 選擇店家: ${SHOP_NAME}...`);
 
-    // 點擊店家選單
-    const shopDropdown = await page.$('div[class*="select"]') || await page.$('button[class*="dropdown"]');
-    if (shopDropdown) {
-      await shopDropdown.click();
-      await delay(1000);
-    }
+    // 點擊店家下拉選單
+    await page.evaluate((shopName) => {
+      // 找到包含 "搜尋店家" 或店家選擇器的元素
+      const selectors = document.querySelectorAll('div[class*="select"], button, input');
+      for (const el of selectors) {
+        if (el.textContent && (el.textContent.includes('搜尋店家') || el.textContent.includes('選擇'))) {
+          el.click();
+          break;
+        }
+      }
+    });
+    await delay(1500);
 
-    // 選擇店家
+    // 選擇特定店家
     await page.evaluate((shopName) => {
       const elements = document.querySelectorAll('div, li, span, option');
       for (const el of elements) {
-        if (el.textContent && el.textContent.includes(shopName)) {
+        if (el.textContent && el.textContent.trim().includes(shopName)) {
           el.click();
           break;
         }
       }
     }, SHOP_NAME);
-    await delay(2000);
+    await delay(3000); // 等待資料載入
 
     // 4. 點擊「昨日」按鈕
     console.log('📅 點擊昨日按鈕...');
     await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, div[class*="btn"], span');
-      for (const btn of buttons) {
-        if (btn.textContent && btn.textContent.trim() === '昨日') {
-          btn.click();
+      const elements = document.querySelectorAll('button, div, span');
+      for (const el of elements) {
+        if (el.textContent && el.textContent.trim() === '昨日') {
+          el.click();
           break;
         }
       }
     });
-    await delay(3000);
+    await delay(5000); // 增加等待時間，讓資料完全載入
 
     // 5. 抓取數據
     console.log('💰 抓取營業數據...');
 
+    // 先截圖 debug
+    const pageContent = await page.content();
+    console.log('📄 頁面長度:', pageContent.length);
+
     const data = await page.evaluate(() => {
       const result = {
         totalRevenue: 0,
-        uberEatsRevenue: 0
+        uberEatsRevenue: 0,
+        debug: []
       };
 
-      // 方法1: 尋找包含 "總營業額" 文字的元素，取其相鄰的數值
-      const allDivs = Array.from(document.querySelectorAll('div, span, h3'));
-      for (const el of allDivs) {
-        const text = el.innerText || '';
+      // 方法1: 找所有包含 $ 符號的元素
+      const allText = document.body.innerText;
+      result.debug.push('頁面文字長度: ' + allText.length);
 
-        // 總營業額 - 找到標籤後取父元素中的金額
-        if (text.trim() === '總營業額') {
-          const parent = el.closest('div');
-          if (parent) {
-            const valueMatch = parent.innerText.match(/\$?([\d,]+)/);
-            if (valueMatch) {
-              result.totalRevenue = parseInt(valueMatch[1].replace(/,/g, ''));
+      // 找總營業額 - 通常是最大的金額數字
+      const moneyMatches = allText.match(/\$[\d,]+/g);
+      if (moneyMatches) {
+        result.debug.push('找到金額數量: ' + moneyMatches.length);
+        // 轉換並找最大值
+        const values = moneyMatches.map(m => parseInt(m.replace(/[$,]/g, '')));
+        result.totalRevenue = Math.max(...values);
+      }
+
+      // 方法2: 尋找 Uber Eats 相關的營業額
+      const bodyText = document.body.innerText;
+      const lines = bodyText.split('\n');
+      for (const line of lines) {
+        if (line.includes('Uber') && line.includes('Eats')) {
+          const match = line.match(/\$?([\d,]+)/g);
+          if (match && match.length > 0) {
+            // 取數字部分
+            const nums = match.map(m => parseInt(m.replace(/[$,]/g, '')));
+            // 取最後一個非零數字（通常是營業額）
+            for (let i = nums.length - 1; i >= 0; i--) {
+              if (nums[i] > 0 && nums[i] < 100000) {
+                result.uberEatsRevenue = nums[i];
+                break;
+              }
             }
           }
         }
       }
 
-      // 方法2: 尋找 Uber Eats 營業額
-      const allElements = Array.from(document.querySelectorAll('div, tr, td'));
-      for (const el of allElements) {
-        const text = el.innerText || '';
-        if (text.includes('Uber') && text.includes('Eats')) {
-          // 找到包含金額的子元素
-          const matches = text.match(/\$?([\d,]+)/g);
-          if (matches && matches.length > 0) {
-            // 取最後一個匹配（通常是營業額）
-            const lastMatch = matches[matches.length - 1];
-            result.uberEatsRevenue = parseInt(lastMatch.replace(/[,$]/g, ''));
-          }
-        }
-      }
-
-      // 備用方法: 如果找不到總營業額，嘗試找 info-title 類別
+      // 方法3: 如果還是找不到總營業額，用更精確的方式
       if (result.totalRevenue === 0) {
-        const infoTitles = document.querySelectorAll('h3.info-title, .info-title');
-        if (infoTitles.length > 0) {
-          const firstValue = infoTitles[0].innerText;
-          const match = firstValue.match(/\$?([\d,]+)/);
-          if (match) {
-            result.totalRevenue = parseInt(match[1].replace(/,/g, ''));
+        const divs = document.querySelectorAll('div, h3, span');
+        for (const div of divs) {
+          const text = div.innerText || '';
+          if (text.includes('總營業額')) {
+            const parent = div.parentElement;
+            if (parent) {
+              const match = parent.innerText.match(/\$?([\d,]+)/);
+              if (match) {
+                result.totalRevenue = parseInt(match[1].replace(/,/g, ''));
+              }
+            }
           }
         }
       }
@@ -144,10 +150,16 @@ async function scrapeReport(username, password) {
       return result;
     });
 
+    // 輸出 debug 資訊
+    if (data.debug) {
+      data.debug.forEach(d => console.log('🔍', d));
+      delete data.debug;
+    }
+
     // 計算昨日日期
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const dateStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
+    const dateStr = yesterday.toISOString().split('T')[0];
 
     console.log(`📈 數據: 日期=${dateStr}, 總營業額=${data.totalRevenue}, UberEats=${data.uberEatsRevenue}`);
 
