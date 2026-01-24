@@ -244,10 +244,12 @@ async function scrapeReport(username, password) {
       return result;
     });
 
-    // 計算昨日日期
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const dateStr = yesterday.toISOString().split('T')[0];
+    // 計算昨日日期 (使用台灣時區 UTC+8)
+    const now = new Date();
+    // 轉換為台灣時間
+    const taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    taiwanTime.setDate(taiwanTime.getDate() - 1);
+    const dateStr = taiwanTime.toISOString().split('T')[0];
 
     console.log(`📈 數據: 日期=${dateStr}, 總營業額=${data.totalRevenue}, UberEats=${data.uberEatsRevenue}`);
 
