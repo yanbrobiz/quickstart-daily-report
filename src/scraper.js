@@ -86,54 +86,49 @@ async function scrapeReport(username, password) {
       }
 
       // 抓取 Uber Eats 營業額
-      // 頁面結構: "Uber" 和 "Eats" 可能在不同行，金額在附近
-      const lines = bodyText.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim().toLowerCase();
-        // 檢查是否包含 "uber" (可能 "Eats" 在下一行)
-        if (line.includes('uber')) {
-          // 合併前後幾行來找金額
-          const contextLines = [];
-          for (let j = Math.max(0, i - 1); j <= Math.min(lines.length - 1, i + 3); j++) {
-            contextLines.push(lines[j]);
-          }
-          const combinedText = contextLines.join(' ');
+      // UberEats 是用圖片 logo 顯示，需要找包含 ubereats 圖片的元素
 
-          // 找金額 (格式: $3,515 或 3,515 或 3515)
-          const amountMatch = combinedText.match(/\$?([\d,]+)/g);
-          if (amountMatch) {
-            for (const m of amountMatch) {
-              const val = parseInt(m.replace(/[$,]/g, ''));
-              // Uber Eats 金額應該大於 0 且小於總營業額
-              if (val > 0 && val < 50000 && val !== result.totalRevenue) {
+      // 方法1: 找包含 ubereats 圖片的容器，然後取金額
+      const images = document.querySelectorAll('img');
+      for (const img of images) {
+        const src = (img.src || '').toLowerCase();
+        const alt = (img.alt || '').toLowerCase();
+        if (src.includes('ubereats') || src.includes('uber-eats') ||
+            alt.includes('ubereats') || alt.includes('uber')) {
+          // 找到 UberEats 圖片，向上找父容器取金額
+          let parent = img.parentElement;
+          for (let i = 0; i < 5 && parent; i++) {
+            const text = parent.textContent || '';
+            const match = text.match(/\$([\d,]+)/);
+            if (match) {
+              const val = parseInt(match[1].replace(/,/g, ''));
+              if (val > 0 && val < result.totalRevenue) {
                 result.uberEatsRevenue = val;
                 break;
               }
             }
+            parent = parent.parentElement;
           }
           if (result.uberEatsRevenue > 0) break;
         }
       }
 
-      // Fallback: 用 DOM 結構找 Uber Eats 金額
+      // 方法2: 找包含 "Uber" 文字的行 (有些頁面可能用文字)
       if (result.uberEatsRevenue === 0) {
-        const allElements = document.querySelectorAll('div, span, td, tr');
-        for (const el of allElements) {
-          const text = el.textContent || '';
-          const lowerText = text.toLowerCase();
-          // 檢查是否包含 uber (不要求同時有 eats，因為可能換行)
-          if (lowerText.includes('uber') && text.includes('$')) {
-            const matches = text.match(/\$([\d,]+)/g);
-            if (matches) {
-              for (const m of matches) {
-                const val = parseInt(m.replace(/[$,]/g, ''));
-                if (val > 0 && val < result.totalRevenue) {
-                  result.uberEatsRevenue = val;
-                  break;
-                }
+        const lines = bodyText.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (line.toLowerCase().includes('uber')) {
+            // 合併附近幾行
+            const context = lines.slice(Math.max(0, i - 1), i + 3).join(' ');
+            const match = context.match(/\$([\d,]+)/);
+            if (match) {
+              const val = parseInt(match[1].replace(/,/g, ''));
+              if (val > 0 && val < result.totalRevenue) {
+                result.uberEatsRevenue = val;
+                break;
               }
             }
-            if (result.uberEatsRevenue > 0) break;
           }
         }
       }
