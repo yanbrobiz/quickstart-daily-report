@@ -1,14 +1,14 @@
 const puppeteer = require('puppeteer');
 
 const LOGIN_URL = 'https://app.quickclick.cc/console/eaa-login';
-const SHOP_STAT_URL = 'https://app.quickclick.cc/console/summary/shop-stat';
-const SHOP_NAME = '天心坊湯包虎林店';
+const STAT_URL = 'https://app.quickclick.cc/console/summary/stat';
 
 // Helper function for delay
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * 抓取 QuickClick 後台的昨日營業數據
+ * 抓取 QuickClick 後台的當日營業數據
+ * 於每天 23:00 執行，抓取當日 00:00~23:00 的數據
  */
 async function scrapeReport(username, password) {
   console.log('🚀 啟動瀏覽器...');
@@ -40,202 +40,73 @@ async function scrapeReport(username, password) {
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
     console.log('✅ 登入成功');
 
-    // 2. 導航到店家報表頁面
-    console.log('📊 前往店家報表頁面...');
-    await page.goto(SHOP_STAT_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    // 等待頁面載入 (使用固定延遲，避免選擇器在不同環境不一致)
-    await delay(5000);
+    // 2. 導航到營業概況頁面 (登入後預設就是今日數據)
+    console.log('📊 前往營業概況頁面...');
+    await page.goto(STAT_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+    await delay(5000); // 等待頁面完全載入
 
-    // 3. 選擇店家
-    console.log(`🏪 選擇店家: ${SHOP_NAME}...`);
-
-    // 3a. 尋找店家下拉選單 (支援中英文 placeholder)
-    // 先嘗試找出所有 input 的 placeholder 來 debug
-    const placeholders = await page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll('input'));
-      return inputs.map(i => i.placeholder).filter(p => p);
-    });
-    console.log('🔍 頁面上的 input placeholders:', placeholders);
-
-    // 嘗試多種可能的選擇器 (優先順序很重要!)
-    const possibleSelectors = [
-      "input[placeholder='(Search Store)']",  // 英文版店家選擇器
-      "input[placeholder='(搜尋店家)']",       // 中文版店家選擇器
-      "input[placeholder*='Store']",          // 包含 Store 的
-      "input[placeholder*='店家']",            // 包含店家的
-      "input[placeholder*='搜尋']",            // 包含搜尋的
-      "input[placeholder*='Search']",         // 包含 Search 的
-      // 注意: Select 放最後，因為它可能匹配到日期選擇器
-    ];
-
-    let dropdownClicked = false;
-    for (const selector of possibleSelectors) {
-      try {
-        const element = await page.$(selector);
-        if (element) {
-          console.log(`✅ 找到選擇器: ${selector}`);
-          await element.click();
-          dropdownClicked = true;
-          break;
-        }
-      } catch (e) {
-        // 繼續嘗試下一個
-      }
-    }
-
-    if (!dropdownClicked) {
-      // Fallback: 點擊包含 "Select" 或 "Shop" 文字的元素
-      console.log('⚠️ 使用 fallback 點擊方式...');
-      await page.evaluate(() => {
-        const elements = document.querySelectorAll('div, input, button, span');
-        for (const el of elements) {
-          const text = el.textContent || el.placeholder || '';
-          if (text.includes('Select') || text.includes('Shop') || text.includes('搜尋') || text.includes('店家')) {
-            el.click();
-            break;
-          }
-        }
-      });
-    }
-    await delay(2000); // 等待下拉選單動畫
-
-    // 3b. 選擇特定店家 (使用 XPath 定位含有特定文字的 li 或 span)
-    const shopOptionXPath = `//li[.//span[contains(text(), '${SHOP_NAME}')]] | //span[contains(text(), '${SHOP_NAME}')]`;
-    try {
-      await page.waitForXPath(shopOptionXPath, { timeout: 10000 });
-      const [shopOption] = await page.$x(shopOptionXPath);
-
-      if (shopOption) {
-        await shopOption.click();
-        console.log('✅ 已點擊店家選項');
-      } else {
-        throw new Error(`找不到店家: ${SHOP_NAME}`);
-      }
-    } catch (e) {
-      console.log('⚠️ XPath 方式失敗，嘗試 evaluate 點擊...');
-      await page.evaluate((shopName) => {
-        const elements = document.querySelectorAll('li, span, div');
-        for (const el of elements) {
-          if (el.textContent && el.textContent.includes(shopName)) {
-            el.click();
-            break;
-          }
-        }
-      }, SHOP_NAME);
-    }
-
-    await delay(3000); // 等待資料刷新
-
-    // 4. 點擊「昨日/Yesterday」按鈕
-    console.log('📅 點擊昨日按鈕...');
-    // 支援中英文的 XPath
-    const yesterdayBtnXPath = "//button[contains(., '昨日') or contains(., 'Yesterday')] | //div[contains(@class, 'el-radio-button')]/span[contains(., '昨日') or contains(., 'Yesterday')] | //span[text()='Yesterday'] | //span[text()='昨日']";
-
-    try {
-      await page.waitForXPath(yesterdayBtnXPath, { timeout: 10000 });
-      const [yesterdayBtn] = await page.$x(yesterdayBtnXPath);
-
-      if (yesterdayBtn) {
-        await yesterdayBtn.click();
-        console.log('✅ 已點擊昨日按鈕');
-      }
-    } catch (e) {
-      // Fallback: 遍歷查找 (保留原本的邏輯作為備案)
-      console.log('⚠️ XPath 方式失敗，使用 fallback 點擊...');
-      await page.evaluate(() => {
-        const elements = document.querySelectorAll('button, div, span');
-        for (const el of elements) {
-          const text = el.textContent ? el.textContent.trim() : '';
-          if (text === '昨日' || text === 'Yesterday') {
-            el.click();
-            break;
-          }
-        }
-      });
-    }
-
-    await delay(5000); // 等待資料完全載入
-
-    // 5. 抓取數據
+    // 3. 抓取數據 (頁面預設顯示今日 00:00~23:00 的數據)
     console.log('💰 抓取營業數據...');
 
     const data = await page.evaluate(() => {
       const result = {
         totalRevenue: 0,
-        uberEatsRevenue: 0
+        uberEatsRevenue: 0,
+        displayedDate: null
       };
 
       const bodyText = document.body.innerText;
 
-      // 方法1: 找總營業額 (通常是頁面上最大的金額)
-      // 排除掉可能是日期的數字 (例如 2026) 和過小的數字
+      // 從頁面抓取日期 (格式: 2026-01-25 12:00AM ~ 2026-01-25 10:45PM)
+      const dateMatch = bodyText.match(/(\d{4}-\d{2}-\d{2})\s+\d{1,2}:\d{2}[AP]M\s*~\s*\d{4}-\d{2}-\d{2}/);
+      if (dateMatch) {
+        result.displayedDate = dateMatch[1];
+      }
+
+      // 抓取總營業額 (頁面上第一個大金額，在「營業額」標籤下)
+      // 找所有 $ 開頭的金額
       const moneyMatches = bodyText.match(/\$[\d,]+/g);
       if (moneyMatches) {
         const values = moneyMatches
           .map(m => parseInt(m.replace(/[$,]/g, '')))
-          .filter(v => v > 100); // 過濾掉太小的數字
+          .filter(v => v > 100);
 
         if (values.length > 0) {
-          result.totalRevenue = Math.max(...values);
+          // 第一個較大的金額通常是總營業額
+          result.totalRevenue = values[0];
         }
       }
 
-      // 如果方法1失敗，嘗試查找 "總營業額" 關鍵字附近的數字
-      if (result.totalRevenue === 0) {
-        const blocks = document.querySelectorAll('div, .card-panel-num');
-        for (const block of blocks) {
-          if (block.innerText.includes('總營業額')) {
-            // 嘗試在該元素的父層或本身找數字
-            const numMatch = (block.innerText + block.parentElement?.innerText).match(/\$?([\d,]+)/);
-            if (numMatch) {
-              const val = parseInt(numMatch[1].replace(/,/g, ''));
-              if (val > result.totalRevenue) result.totalRevenue = val;
+      // 抓取 Uber Eats 營業額
+      // 頁面結構: "Uber Eats" 文字後面跟著金額
+      const lines = bodyText.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.includes('Uber') && line.includes('Eats')) {
+          // 檢查同一行或下一行是否有金額
+          const combinedText = line + ' ' + (lines[i + 1] || '');
+          const match = combinedText.match(/\$?([\d,]+)/);
+          if (match) {
+            const val = parseInt(match[1].replace(/,/g, ''));
+            if (val > 0 && val < result.totalRevenue) {
+              result.uberEatsRevenue = val;
+              break;
             }
           }
         }
       }
 
-      // 方法2: 尋找 Uber Eats 營業額 (使用表格結構)
-      // 頁面上有 "點餐平台" 表格，Uber Eats 那行包含 ubereats.svg 圖片
-      const tableRows = document.querySelectorAll('.el-table__row');
-      for (const row of tableRows) {
-        const imgs = row.querySelectorAll('img');
-        let isUberEats = false;
-        for (const img of imgs) {
-          if (img.src && img.src.includes('ubereats')) {
-            isUberEats = true;
-            break;
-          }
-        }
-        if (isUberEats) {
-          // 取該行所有儲存格的文字
-          const cells = row.querySelectorAll('td');
-          if (cells.length >= 3) {
-            // 營業額通常在最後一個儲存格
-            const revenueText = cells[cells.length - 1].innerText;
-            const match = revenueText.match(/\$?([\d,]+)/);
+      // Fallback: 用更精確的方式找 Uber Eats 金額
+      if (result.uberEatsRevenue === 0) {
+        // 尋找包含 Uber Eats 的區塊
+        const allElements = document.querySelectorAll('div, span, td');
+        for (const el of allElements) {
+          const text = el.textContent || '';
+          if (text.includes('Uber') && text.includes('Eats') && text.includes('$')) {
+            const match = text.match(/\$([\d,]+)/);
             if (match) {
               result.uberEatsRevenue = parseInt(match[1].replace(/,/g, ''));
-            }
-          }
-          break;
-        }
-      }
-
-      // Fallback: 如果表格方式找不到，嘗試用文字搜尋
-      if (result.uberEatsRevenue === 0) {
-        const lines = bodyText.split('\n');
-        for (const line of lines) {
-          if (line.includes('Uber') && line.includes('Eats')) {
-            const match = line.match(/\$?([\d,]+)/g);
-            if (match && match.length > 0) {
-              const nums = match.map(m => parseInt(m.replace(/[$,]/g, '')));
-              for (let i = nums.length - 1; i >= 0; i--) {
-                if (nums[i] > 0 && nums[i] < 100000) {
-                  result.uberEatsRevenue = nums[i];
-                  break;
-                }
-              }
+              break;
             }
           }
         }
@@ -244,12 +115,18 @@ async function scrapeReport(username, password) {
       return result;
     });
 
-    // 計算昨日日期 (使用台灣時區 UTC+8)
-    const now = new Date();
-    // 轉換為台灣時間
-    const taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-    taiwanTime.setDate(taiwanTime.getDate() - 1);
-    const dateStr = taiwanTime.toISOString().split('T')[0];
+    // 優先使用網站顯示的日期，若抓不到才用本地計算
+    let dateStr = data.displayedDate;
+
+    if (!dateStr) {
+      console.log('⚠️ 無法從網站抓取日期，使用本地計算...');
+      // 計算當日日期 (使用台灣時區 UTC+8)
+      const now = new Date();
+      const taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+      dateStr = taiwanTime.toISOString().split('T')[0];
+    } else {
+      console.log(`✅ 從網站抓取到日期: ${dateStr}`);
+    }
 
     console.log(`📈 數據: 日期=${dateStr}, 總營業額=${data.totalRevenue}, UberEats=${data.uberEatsRevenue}`);
 

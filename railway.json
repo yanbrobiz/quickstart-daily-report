@@ -6,6 +6,6 @@
     },
     "deploy": {
         "startCommand": "node src/index.js",
-        "cronSchedule": "1 16 * * *"
+        "cronSchedule": "0 15 * * *"
     }
 }
