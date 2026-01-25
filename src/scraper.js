@@ -58,12 +58,20 @@ async function scrapeReport(username, password) {
       const bodyText = document.body.innerText;
 
       // 從頁面抓取日期 (格式: 2026-01-25 12:00AM ~ 2026-01-25 10:45PM)
-      const dateMatch = bodyText.match(/(\d{4}-\d{2}-\d{2})\s+\d{1,2}:\d{2}[AP]M\s*~\s*\d{4}-\d{2}-\d{2}/);
-      if (dateMatch) {
-        result.displayedDate = dateMatch[1];
+      // 支援多種格式
+      const datePatterns = [
+        /(\d{4}-\d{2}-\d{2})\s+\d{1,2}:\d{2}\s*[AP]M/i,  // 2026-01-25 12:00AM
+        /(\d{4}-\d{2}-\d{2})/,  // 簡單格式 2026-01-25
+      ];
+      for (const pattern of datePatterns) {
+        const match = bodyText.match(pattern);
+        if (match) {
+          result.displayedDate = match[1];
+          break;
+        }
       }
 
-      // 抓取總營業額 (頁面上第一個大金額，在「營業額」標籤下)
+      // 抓取總營業額 (頁面上「營業額」區塊下的大金額)
       // 找所有 $ 開頭的金額
       const moneyMatches = bodyText.match(/\$[\d,]+/g);
       if (moneyMatches) {
@@ -78,36 +86,54 @@ async function scrapeReport(username, password) {
       }
 
       // 抓取 Uber Eats 營業額
-      // 頁面結構: "Uber Eats" 文字後面跟著金額
+      // 頁面結構: "Uber" 和 "Eats" 可能在不同行，金額在附近
       const lines = bodyText.split('\n');
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line.includes('Uber') && line.includes('Eats')) {
-          // 檢查同一行或下一行是否有金額
-          const combinedText = line + ' ' + (lines[i + 1] || '');
-          const match = combinedText.match(/\$?([\d,]+)/);
-          if (match) {
-            const val = parseInt(match[1].replace(/,/g, ''));
-            if (val > 0 && val < result.totalRevenue) {
-              result.uberEatsRevenue = val;
-              break;
+        const line = lines[i].trim().toLowerCase();
+        // 檢查是否包含 "uber" (可能 "Eats" 在下一行)
+        if (line.includes('uber')) {
+          // 合併前後幾行來找金額
+          const contextLines = [];
+          for (let j = Math.max(0, i - 1); j <= Math.min(lines.length - 1, i + 3); j++) {
+            contextLines.push(lines[j]);
+          }
+          const combinedText = contextLines.join(' ');
+
+          // 找金額 (格式: $3,515 或 3,515 或 3515)
+          const amountMatch = combinedText.match(/\$?([\d,]+)/g);
+          if (amountMatch) {
+            for (const m of amountMatch) {
+              const val = parseInt(m.replace(/[$,]/g, ''));
+              // Uber Eats 金額應該大於 0 且小於總營業額
+              if (val > 0 && val < 50000 && val !== result.totalRevenue) {
+                result.uberEatsRevenue = val;
+                break;
+              }
             }
           }
+          if (result.uberEatsRevenue > 0) break;
         }
       }
 
-      // Fallback: 用更精確的方式找 Uber Eats 金額
+      // Fallback: 用 DOM 結構找 Uber Eats 金額
       if (result.uberEatsRevenue === 0) {
-        // 尋找包含 Uber Eats 的區塊
-        const allElements = document.querySelectorAll('div, span, td');
+        const allElements = document.querySelectorAll('div, span, td, tr');
         for (const el of allElements) {
           const text = el.textContent || '';
-          if (text.includes('Uber') && text.includes('Eats') && text.includes('$')) {
-            const match = text.match(/\$([\d,]+)/);
-            if (match) {
-              result.uberEatsRevenue = parseInt(match[1].replace(/,/g, ''));
-              break;
+          const lowerText = text.toLowerCase();
+          // 檢查是否包含 uber (不要求同時有 eats，因為可能換行)
+          if (lowerText.includes('uber') && text.includes('$')) {
+            const matches = text.match(/\$([\d,]+)/g);
+            if (matches) {
+              for (const m of matches) {
+                const val = parseInt(m.replace(/[$,]/g, ''));
+                if (val > 0 && val < result.totalRevenue) {
+                  result.uberEatsRevenue = val;
+                  break;
+                }
+              }
             }
+            if (result.uberEatsRevenue > 0) break;
           }
         }
       }
