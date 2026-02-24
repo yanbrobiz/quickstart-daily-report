@@ -48,61 +48,84 @@ async function scrapeReport(username, password) {
     // 3. 抓取數據 (頁面預設顯示今日 00:00~23:00 的數據)
     console.log('💰 抓取營業數據...');
 
+    // 先輸出頁面文字內容供除錯
+    const pageText = await page.evaluate(() => document.body.innerText);
+    console.log('📄 頁面文字內容 (前 1500 字):');
+    console.log(pageText.substring(0, 1500));
+    console.log('--- 頁面內容結束 ---');
+
     const data = await page.evaluate(() => {
       const result = {
         totalRevenue: 0,
         uberEatsRevenue: 0,
-        displayedDate: null
+        displayedDate: null,
+        debug: {}
       };
 
       const bodyText = document.body.innerText;
 
-      // 從頁面抓取日期 (格式: 2026-01-25 12:00AM ~ 2026-01-25 10:45PM)
-      // 支援多種格式
+      // 從頁面抓取日期
       const datePatterns = [
-        /(\d{4}-\d{2}-\d{2})\s+\d{1,2}:\d{2}\s*[AP]M/i,  // 2026-01-25 12:00AM
-        /(\d{4}-\d{2}-\d{2})/,  // 簡單格式 2026-01-25
+        /(\d{4}-\d{2}-\d{2})\s+\d{1,2}:\d{2}\s*[AP]M/i,
+        /(\d{4}-\d{2}-\d{2})/,
+        /(\d{4}\/\d{2}\/\d{2})/,  // 支援 2026/01/25 格式
       ];
       for (const pattern of datePatterns) {
         const match = bodyText.match(pattern);
         if (match) {
-          result.displayedDate = match[1];
+          result.displayedDate = match[1].replace(/\//g, '-');
           break;
         }
       }
 
-      // 抓取總營業額 (頁面上「營業額」區塊下的大金額)
-      // 找所有 $ 開頭的金額
-      const moneyMatches = bodyText.match(/\$[\d,]+/g);
-      if (moneyMatches) {
+      // 抓取總營業額 - 嘗試多種格式
+      // 格式1: $1,234
+      let moneyMatches = bodyText.match(/\$[\d,]+/g);
+      // 格式2: NT$1,234 或 NT$ 1,234
+      if (!moneyMatches || moneyMatches.length === 0) {
+        moneyMatches = bodyText.match(/NT\$?\s*[\d,]+/gi);
+      }
+      // 格式3: 純數字（找營業額附近的數字）
+      if (!moneyMatches || moneyMatches.length === 0) {
+        // 找「營業額」後面的數字
+        const revenueMatch = bodyText.match(/營業額[^\d]*?([\d,]+)/);
+        if (revenueMatch) {
+          moneyMatches = [revenueMatch[1]];
+        }
+      }
+
+      result.debug.moneyMatches = moneyMatches;
+
+      if (moneyMatches && moneyMatches.length > 0) {
         const values = moneyMatches
-          .map(m => parseInt(m.replace(/[$,]/g, '')))
+          .map(m => parseInt(m.replace(/[^\d]/g, '')))
           .filter(v => v > 100);
 
+        result.debug.parsedValues = values;
+
         if (values.length > 0) {
-          // 第一個較大的金額通常是總營業額
-          result.totalRevenue = values[0];
+          result.totalRevenue = Math.max(...values); // 取最大值作為總營業額
         }
       }
 
       // 抓取 Uber Eats 營業額
-      // UberEats 是用圖片 logo 顯示，需要找包含 ubereats 圖片的元素
-
-      // 方法1: 找包含 ubereats 圖片的容器，然後取金額
+      // 方法1: 找包含 ubereats 圖片的容器
       const images = document.querySelectorAll('img');
       for (const img of images) {
         const src = (img.src || '').toLowerCase();
         const alt = (img.alt || '').toLowerCase();
-        if (src.includes('ubereats') || src.includes('uber-eats') ||
+        if (src.includes('ubereats') || src.includes('uber-eats') || src.includes('uber_eats') ||
             alt.includes('ubereats') || alt.includes('uber')) {
-          // 找到 UberEats 圖片，向上找父容器取金額
           let parent = img.parentElement;
-          for (let i = 0; i < 5 && parent; i++) {
+          for (let i = 0; i < 8 && parent; i++) {
             const text = parent.textContent || '';
-            const match = text.match(/\$([\d,]+)/);
+            // 嘗試多種金額格式
+            let match = text.match(/\$([\d,]+)/);
+            if (!match) match = text.match(/NT\$?\s*([\d,]+)/i);
+            if (!match) match = text.match(/([\d,]{3,})/); // 至少3位數字
             if (match) {
               const val = parseInt(match[1].replace(/,/g, ''));
-              if (val > 0 && val < result.totalRevenue) {
+              if (val > 0) {
                 result.uberEatsRevenue = val;
                 break;
               }
@@ -113,18 +136,19 @@ async function scrapeReport(username, password) {
         }
       }
 
-      // 方法2: 找包含 "Uber" 文字的行 (有些頁面可能用文字)
+      // 方法2: 找包含 "Uber" 文字的行
       if (result.uberEatsRevenue === 0) {
         const lines = bodyText.split('\n');
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i].trim();
           if (line.toLowerCase().includes('uber')) {
-            // 合併附近幾行
-            const context = lines.slice(Math.max(0, i - 1), i + 3).join(' ');
-            const match = context.match(/\$([\d,]+)/);
+            const context = lines.slice(Math.max(0, i - 2), i + 4).join(' ');
+            let match = context.match(/\$([\d,]+)/);
+            if (!match) match = context.match(/NT\$?\s*([\d,]+)/i);
+            if (!match) match = context.match(/([\d,]{3,})/);
             if (match) {
               const val = parseInt(match[1].replace(/,/g, ''));
-              if (val > 0 && val < result.totalRevenue) {
+              if (val > 0) {
                 result.uberEatsRevenue = val;
                 break;
               }
@@ -135,6 +159,8 @@ async function scrapeReport(username, password) {
 
       return result;
     });
+
+    console.log('🔍 除錯資訊:', JSON.stringify(data.debug, null, 2));
 
     // 優先使用網站顯示的日期，若抓不到才用本地計算
     let dateStr = data.displayedDate;
