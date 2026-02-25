@@ -26,6 +26,11 @@ async function scrapeReport(username, password) {
   try {
     const page = await browser.newPage();
 
+    // 設定瀏覽器語言為繁體中文，避免網站英文版 bug（數據顯示為 0）
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8'
+    });
+
     // 設定 User-Agent 偽裝成桌面瀏覽器
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
